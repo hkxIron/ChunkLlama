@@ -39,6 +39,7 @@ class ChunkLlamaRotaryEmbedding(nn.Module):
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         # employing yarn will lead to better performance but results reported in our paper did not use yarn.
         scale = seq_len / self.max_position_embeddings
+        # yarn temperature
         mscale = get_mscale(scale)
         
         inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
@@ -138,6 +139,7 @@ def forward(
     key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
     value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
+    # key_states:[batch_size, num_heads, seq_len, head_dim]
     kv_seq_len = key_states.shape[-2]
     # during inference
     if past_key_value is not None:
@@ -149,6 +151,7 @@ def forward(
     # need to chunk query states
     q_cos, q_sin, qc_cos, qc_sin, k_cos, k_sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
     key_states = apply_rotary_pos_emb(key_states, k_cos, k_sin, position_ids)
+    # position_ids, chunk_len=3680, 所有的position_id均在chunk_len中
     position_ids = position_ids % chunk_len
 
     if past_key_value is not None:
@@ -159,8 +162,11 @@ def forward(
 
     flash_results = []
     if not has_kv_cache:
+        # 没有kv cache
         q_states_intra = apply_rotary_pos_emb(query_states[:, :, :chunk_len, :], q_cos, q_sin,
                                              position_ids[:, :chunk_len])
+        # key_states:[batch_size, num_heads, seq_len, head_dim]
+        # key_states_prev:[batch_size, num_heads, chunk_len, head_dim]
         k_states_prev = key_states[:, :, :chunk_len, :]
         v_states_prev = value_states[:, :, :chunk_len, :]
         flash_results.append(do_flash_attn(q_states_intra, k_states_prev, v_states_prev))
@@ -250,6 +256,7 @@ def replace_with_chunkllama(pretraining_length=4096, local_window_size=None):
     global local_window
     chunk_size = pretraining_length * 3 // 4
     local_window = local_window_size if local_window_size else pretraining_length // 8
+    # 直接将包里的函数替换掉
     transformers.models.llama.modeling_llama.LlamaAttention.forward = forward
     transformers.models.llama.modeling_llama.LlamaFlashAttention2.forward = forward
     transformers.models.llama.modeling_llama.LlamaRotaryEmbedding = ChunkLlamaRotaryEmbedding

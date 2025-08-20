@@ -258,6 +258,7 @@ def train():
     )
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    # NOTE:先进行replace
     replace_with_chunkllama(training_args.pretraining_length)
 
     local_rank = training_args.local_rank

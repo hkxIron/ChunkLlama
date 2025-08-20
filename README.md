@@ -175,7 +175,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export WANDB_MODE=dryrun
 
 python -m torch.distributed.run --nproc_per_node=8 \
-         train_chunkllama_16k.py \
+         fine-tune/train_chunkllama_16k.py \
         --model_name_or_path meta-llama/llama-2-7b-chat-hf \
         --bf16 \
         --output_dir checkpoints/chunkllama-7b-release \
