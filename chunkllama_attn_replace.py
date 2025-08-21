@@ -151,7 +151,7 @@ def forward(
     # need to chunk query states
     q_cos, q_sin, qc_cos, qc_sin, k_cos, k_sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
     key_states = apply_rotary_pos_emb(key_states, k_cos, k_sin, position_ids)
-    # position_ids, chunk_len=3680, 所有的position_id均在chunk_len中
+    # NOTE: position_ids, chunk_len=3680, 所有的position_id均在chunk_len中
     position_ids = position_ids % chunk_len
 
     if past_key_value is not None:
@@ -164,7 +164,7 @@ def forward(
     if not has_kv_cache:
         # 没有kv cache
         q_states_intra = apply_rotary_pos_emb(query_states[:, :, :chunk_len, :], q_cos, q_sin,
-                                             position_ids[:, :chunk_len])
+                                              position_ids[:, :chunk_len])
         # key_states:[batch_size, num_heads, seq_len, head_dim]
         # key_states_prev:[batch_size, num_heads, chunk_len, head_dim]
         k_states_prev = key_states[:, :, :chunk_len, :]
@@ -174,25 +174,30 @@ def forward(
 
         while remain_len > 0:
             flash_per_chunk = []
+            # NOTE:从右往左平移, 即由远及近，每次只取chunk_len的长度进行attention
             begin = kv_seq_len - remain_len
             curr_chunk_len = min(chunk_len, remain_len)
-            end = begin + curr_chunk_len
+            end = begin + curr_chunk_len # chunk_len
 
+            # key_states:[batch_size, num_heads, chunk_len, head_dim], 每次只取chunk_len的块
             q_states_intra = apply_rotary_pos_emb(query_states[:, :, begin:end, :], q_cos, q_sin,
-                                                 position_ids[:, begin:end])
+                                                  position_ids[:, begin:end])
 
             k_states_intra = key_states[:, :, begin:end, :]
             v_states_intra = value_states[:, :, begin:end, :]
+            # NOTE: 对块内进行attention
             flash_per_chunk.append(do_flash_attn(q_states_intra, k_states_intra, v_states_intra))
 
+            # NOTE: 连续块attention
             q_states_succ = apply_rotary_pos_emb(query_states[:, :, begin:end, :], qc_cos, qc_sin,
-                                                  position_ids[:, begin:end])
+                                                 position_ids[:, begin:end])
             flash_per_chunk.append(do_flash_attn(q_states_succ, k_states_prev, v_states_prev, False))
 
             if begin - (k_states_prev.size(-2)) > 0:
                 prev_len = k_states_prev.size(-2)
+                # NOTE:块间attention
                 q_states_inter = apply_rotary_pos_emb(query_states[:, :, begin:end, :], qc_cos, qc_sin,
-                                                    position_ids[:, chunk_len - 1][:, None].repeat(1, curr_chunk_len))
+                                                      position_ids[:, chunk_len - 1][:, None].repeat(1, curr_chunk_len))
                 k_states_inter = key_states[:, :, :begin - prev_len, :]
                 v_states_inter = value_states[:, :, :begin - prev_len, :]
                 flash_per_chunk.append(do_flash_attn(q_states_inter, k_states_inter, v_states_inter, False))
@@ -203,7 +208,7 @@ def forward(
             remain_len = remain_len - chunk_len
 
         attn_output = merge_attn_outputs(flash_results)
-    else:
+    else: # 有kv cache
         chunk_num_curr = (kv_seq_len - 1) // chunk_len
         q_states_intra = apply_rotary_pos_emb(query_states, q_cos, q_sin, position_ids)
         k_states_intra = key_states[:, :, chunk_len * chunk_num_curr:kv_seq_len, :]

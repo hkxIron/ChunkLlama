@@ -242,12 +242,17 @@ class ArcticAttention(nn.Module):
         self.rope_theta = config.rope_theta
         self.scaling = self.head_dim**-0.5
 
+        """
+        1.每个头的参数放在一块GPU上进行self-attention, 按head头并行
+        2.然后Wo按行并行，即Row分割并行，然后all_reduce_sum即可得到最终的MHA结果
+        """
         self.qkv_proj = QKVParallelLinear(self.hidden_size,
                                           self.head_dim,
                                           self.total_num_heads,
                                           self.total_num_kv_heads,
                                           bias=False,
                                           quant_config=quant_config)
+        # NOTE:行并行
         self.o_proj = RowParallelLinear(
             self.total_num_heads * self.head_dim,
             self.hidden_size,

@@ -507,25 +507,33 @@ class QKVParallelLinear(ColumnParallelLinear):
         if total_num_kv_heads is None:
             total_num_kv_heads = total_num_heads
         self.total_num_kv_heads = total_num_kv_heads
+        """
+        1.每个头的参数放在一块GPU上进行self-attention, 按head头并行
+        2.然后Wo按行并行，即Row分割并行，然后all_reduce_sum即可得到最终的MHA结果
+        """
         # Divide the weight matrix along the last dimension.
         tp_size = get_tensor_model_parallel_world_size()
+        # NOTE: 总head数/并行数 = 每个gpu上的head数
         self.num_heads = divide(self.total_num_heads, tp_size)
         if tp_size >= self.total_num_kv_heads:
             self.num_kv_heads = 1
-            self.num_kv_head_replicas = divide(tp_size,
-                                               self.total_num_kv_heads)
+            self.num_kv_head_replicas = divide(tp_size, self.total_num_kv_heads)
         else:
+            # NOTE: 总head数/并行数 = 每个gpu上的head数 = num_kv_heads
             self.num_kv_heads = divide(self.total_num_kv_heads, tp_size)
             self.num_kv_head_replicas = 1
         input_size = self.hidden_size
-        output_size = (self.num_heads +
-                       2 * self.num_kv_heads) * tp_size * self.head_size
+        output_size = (self.num_heads +  # q_proj
+                       2 * self.num_kv_heads # k_proj,v_proj
+                       ) * tp_size * self.head_size
+
         self.output_sizes = [
             self.num_heads * self.head_size * tp_size,  # q_proj
             self.num_kv_heads * self.head_size * tp_size,  # k_proj
             self.num_kv_heads * self.head_size * tp_size,  # v_proj 
         ]
 
+        # NOTE:最后使用的是列并行, 即拆分了输出的维度
         super().__init__(input_size=input_size,
                          output_size=output_size,
                          bias=bias,
