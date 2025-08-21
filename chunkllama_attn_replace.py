@@ -94,6 +94,12 @@ def apply_rotary_pos_emb(x, cos, sin, position_ids):
     return x_emb
 
 
+"""
+最后将3个attention加权求和：
+1.块内
+2.连续块
+3.块间
+"""
 def merge_attn_outputs(flash_results):
     attn_outputs_all = [flash_results[0][0]]
     flash_results = flash_results[1:]
